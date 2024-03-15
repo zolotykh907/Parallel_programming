@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <inttypes.h>
 
+double t1 = 0;
+ double t2 = 0;
+
 void matrix_vector_product(double *a, double *b, double *c, int m, int n)
 {
 	for (int i = 0; i < m; i++) {
@@ -48,10 +51,10 @@ void run_serial(int m, int n)
 	}
 	for (int j = 0; j < n; j++)
 		b[j] = j;
-	double t = omp_get_wtime();
+	t1 = omp_get_wtime();
 	matrix_vector_product(a, b, c, m, n);
-	t = omp_get_wtime() - t;
-	printf("Elapsed time (serial): %.6f sec.\n", t);
+	t1 = omp_get_wtime() - t1;
+	printf("Elapsed time (serial): %.6f sec.\n", t1);
 	free(a);
 	free(b);
 	free(c);
@@ -73,11 +76,11 @@ void run_parallel(int m, int n)
 	for (int j = 0; j < n; j++)
 		b[j] = j;
 
-	double t = omp_get_wtime();
+	t2 = omp_get_wtime();
 	matrix_vector_product_omp(a, b, c, m, n);
-	t = omp_get_wtime() - t;
+	t2 = omp_get_wtime() - t2;
 
-	printf("Elapsed time (parallel): %.6f sec.\n", t);
+	printf("Elapsed time (parallel): %.6f sec.\n", t2);
 	free(a);
 	free(b);
 	free(c);
@@ -99,6 +102,8 @@ int main(int argc, char **argv)
 	printf("Memory used: %" PRIu64 " MiB\n", ((m * n + m + n) * sizeof(double)) >> 20);
 	run_serial(m, n);
 	run_parallel(m,n);
+
+	printf("SpeedUp = %.6f\n", (t1/t2));
 
 	return 0;
 }
