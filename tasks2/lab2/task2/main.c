@@ -9,7 +9,6 @@ const double a = -4.0;
 const double b = 4.0;
 const int nsteps = 40000000;
 
-/*Вычисление времени*/
 double cpuSecond()
 {
     struct timespec ts;
@@ -23,7 +22,6 @@ double func(double x)
     return exp(-x * x);
 }
 
-/*Последовательное выполенние*/
 double integrate(double (*func)(double), double a, double b, int n)
 {
     double h = (b - a) / n;
@@ -37,7 +35,6 @@ double integrate(double (*func)(double), double a, double b, int n)
     return sum;
 }
 
-/*Параллельная версия*/
 double integrate_omp(double (*func)(double), double a, double b, int n)
 {
     double h = (b - a) / n;
@@ -52,8 +49,8 @@ double integrate_omp(double (*func)(double), double a, double b, int n)
         int ub = (threadid == nthreads - 1) ? (n - 1) : (lb + items_per_thread - 1);
         double sumloc = 0.0;
         for (int i = lb; i <= ub; i++)
-            sumloc += func(a + h * (i + 0.5)); /*Каждый поток накапливает сумму в своей локальной переменной sumloc*/
-        /*Атомарной операцией вычисляется итоговая сумма*/
+            sumloc += func(a + h * (i + 0.5));
+        
         #pragma omp atomic
         sum += sumloc;
     }
@@ -84,8 +81,6 @@ int main(int argc, char** argv)
     printf("Integration f(x) on [%.12f, %.12f], nsteps = %d\n", a, b, nsteps);
     double tserial = run_serial();
     double tparallel = run_parallel();
-    /*printf("Execution time (serial): %.6f\n", tserial);
-    printf("Execution time (parallel): %.6f\n", tparallel);*/
     printf("Speedup: %.2f\n", tserial / tparallel);
     return 0;
 }
