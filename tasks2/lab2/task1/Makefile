@@ -1,2 +1,2 @@
 all:
-	g++ -fopenmp main.cpp -o task1  -lm
+	g -fopenmp main.c -o task1  -lm
