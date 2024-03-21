@@ -1,154 +1,173 @@
-#include <iostream>
-#include <memory>
-#include <chrono>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 #include <omp.h>
+#include <iostream>
 #include <cmath>
+#include <memory>
 
-double epsilon = 0.00001;  // эпсилон
+double e = 0.00001;  // эпсила
 
-std::unique_ptr<double[]> coefficients_matrix;  // матрица коэффициентов
-std::unique_ptr<double[]> solutions_vector;     // вектор ответов на уравнения
-int height = 4, width = 4;  // высота и ширина матрицы
+std::unique_ptr<double[]> A;  // матрица коэффициентов
+std::unique_ptr<double[]> b;  // вектор ответов на уравнения
+int m = 4, n = 4;  // высота на ширину
 
-char end_flag = 'f';  // флаг, указывающий на достижение указанной точности
-double approximation_coefficient = 0.1;  // коэффициент приближения
+char end = 'f';  // флаг, достигнута указанная точность
+double t = 0.1;  // коэффициент приближения
 
 double loss = 0;
-int use_second_parallel_method = 0;
+int parallel_loop = 0;
 
-double cpuSecond()
-{
-    auto now = std::chrono::system_clock::now();
-    auto duration = now.time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count() * 1e-9;
+double cpuSecond() {
+    struct timespec ts;
+    timespec_get(&ts, TIME_UTC);
+    return ((double)ts.tv_sec + (double)ts.tv_nsec * 1.e-9);
 }
 
-void check_accuracy(std::unique_ptr<double[]>& x, std::unique_ptr<double[]>& x_predict, int numThreads, double sum_of_residuals, double sum_of_squared_residuals)
-{
-    int is_switched = 0;
-    double r = std::sqrt(sum_of_residuals) / std::sqrt(sum_of_squared_residuals);
+int t_prov = 0;
+
+void proverka(double* x, double* x_predict, int numThread, double bhg, double bhgv) {
+    int sm = 0;
+    double r = sqrt(bhg) / sqrt(bhgv);
     if (loss < r && loss != 0 && loss > 0.999999999) {
-        approximation_coefficient = approximation_coefficient / 10;
+        t = t / 10;
+        t_prov = 1;
         loss = 0;
-        std::cout << "first " << loss << " " << approximation_coefficient << std::endl;
-        for (int i = 0; i < width; i++) {
+        for (int i = 0; i < n; i++) {
             x[i] = 0;
         }
     }
     else {
-        if (std::abs(loss - r) < 0.00001 && is_switched == 0) {
-            approximation_coefficient = approximation_coefficient * -1;
-            is_switched = 1;
+        if (abs(loss - r) < 0.00001 && sm == 0) {
+            t = t * -1;
+            sm = 1;
         }
-        std::cout << " second " << loss << " " << approximation_coefficient << std::endl;
         loss = r;
-        if (r < epsilon) end_flag = 't';
+        if (r < e) end = 't';
     }
 }
 
-std::unique_ptr<double[]> matrix_vector_product_omp(std::unique_ptr<double[]>& x, int numThreads, double sum_of_squared_residuals)
-{
-    std::unique_ptr<double[]> x_predict(new double[width]);
-    double sum_of_residuals = 0;
-#pragma omp parallel num_threads(numThreads)
+std::unique_ptr<double[]> matrix_vector_product_omp(double* x, int numThread, double bhgv) {
+    std::unique_ptr<double[]> x_predict(new double[n]);
+    double bhg = 0;
+#pragma omp parallel num_threads(numThread)
     {
-        double thread_sum = 0;
-        int num_threads = omp_get_num_threads();
-        int thread_id = omp_get_thread_num();
-        int items_per_thread = height / num_threads;
-        int lb = thread_id * items_per_thread;
-        int ub = (thread_id == num_threads - 1) ? (height - 1) : (lb + items_per_thread - 1);
+        double aaaaaa = 0;
+        int nthreads = omp_get_num_threads();
+        int threadid = omp_get_thread_num();
+        int items_per_thread = m / nthreads;
+        int lb = threadid * items_per_thread;
+        int ub = (threadid == nthreads - 1) ? (m - 1) : (lb + items_per_thread - 1);
 
         for (int i = lb; i <= ub; i++) {
             x_predict[i] = 0;
-            for (int j = 0; j < width; j++) {
-                x_predict[i] += coefficients_matrix[i * width + j] * x[j];
+            for (int j = 0; j < n; j++) {
+                x_predict[i] = x_predict[i] + A[i * n + j] * x[j];
             }
-            x_predict[i] = x_predict[i] - solutions_vector[i];
-            thread_sum += x_predict[i] * x_predict[i];
-            x_predict[i] = x[i] - approximation_coefficient * x_predict[i];
+            x_predict[i] = x_predict[i] - b[i];
+            aaaaaa += x_predict[i] * x_predict[i];
+            x_predict[i] = x[i] - t * x_predict[i];
         }
 #pragma omp atomic
-        sum_of_residuals += thread_sum;
+        bhg += aaaaaa;
     }
-    check_accuracy(x, x_predict, numThreads, sum_of_residuals, sum_of_squared_residuals);
+
+    proverka(x, x_predict.get(), numThread, bhg, bhgv);
+    if (t_prov == 1) {
+        x_predict.reset(x);
+        t_prov = 0;
+    }
     return x_predict;
 }
 
-std::unique_ptr<double[]> matrix_vector_product_omp_second(std::unique_ptr<double[]>& x, int numThreads, double sum_of_squared_residuals)
-{
-    std::unique_ptr<double[]> x_predict(new double[width]);
-    double sum_of_residuals = 0;
-#pragma omp parallel num_threads(numThreads)
+std::unique_ptr<double[]> matrix_vector_product_omp_second(double* x, int numThread, double bhgv) {
+    std::unique_ptr<double[]> x_predict(new double[n]);
+    double bhg = 0;
+#pragma omp parallel num_threads(numThread)
     {
-#pragma omp for schedule(dynamic, int(height / (numThreads * 3))) nowait reduction(+:sum_of_residuals)
-        for (int i = 0; i < height; i++) {
+#pragma omp for schedule(dynamic, int(m / (numThread * 3))) nowait reduction(+:bhg)
+        for (int i = 0; i < m; i++) {
             x_predict[i] = 0;
-            for (int j = 0; j < width; j++) {
-                x_predict[i] += coefficients_matrix[i * width + j] * x[j];
+            for (int j = 0; j < n; j++) {
+                x_predict[i] = x_predict[i] + A[i * n + j] * x[j];
             }
-            x_predict[i] = x_predict[i] - solutions_vector[i];
-            sum_of_residuals += x_predict[i] * x_predict[i];
-            x_predict[i] = x[i] - approximation_coefficient * x_predict[i];
+            x_predict[i] = x_predict[i] - b[i];
+            bhg += x_predict[i] * x_predict[i];
+            x_predict[i] = x[i] - t * x_predict[i];
         }
     }
-    check_accuracy(x, x_predict, numThreads, sum_of_residuals, sum_of_squared_residuals);
+
+    proverka(x, x_predict.get(), numThread, bhg, bhgv);
+    if (t_prov == 1) {
+        x_predict.reset(x);
+        t_prov = 0;
+    }
     return x_predict;
 }
 
-void run_parallel(int numThreads)
-{
-    std::unique_ptr<double[]> x(new double[width]);
-    coefficients_matrix.reset(new double[height * width]);
-    solutions_vector.reset(new double[height]);
-    double sum_of_squared_residuals = 0;
-    double time = cpuSecond();
-#pragma omp parallel num_threads(numThreads)
+void run_parallel(int numThread) {
+    std::unique_ptr<double[]> x(new double[n]);
+    A = std::make_unique<double[]>(m * n);
+    b = std::make_unique<double[]>(m);
+    double bhgv = 0;
+    if (!A || !b || !x) 
     {
-        int num_threads = omp_get_num_threads();
-        int thread_id = omp_get_thread_num();
-        int items_per_thread = height / num_threads;
-        int lb = thread_id * items_per_thread;
-        int ub = (thread_id == num_threads - 1) ? (height - 1) : (lb + items_per_thread - 1);
+        printf("Error allocate memory!\n");
+        exit(1);
+    }
+
+    double time = cpuSecond();
+#pragma omp parallel num_threads(numThread)
+    {
+        int nthreads = omp_get_num_threads();
+        int threadid = omp_get_thread_num();
+        int items_per_thread = m / nthreads;
+        int lb = threadid * items_per_thread;
+        int ub = (threadid == nthreads - 1) ? (m - 1) : (lb + items_per_thread - 1);
         for (int i = lb; i <= ub; i++) {
-            for (int j = 0; j < width; j++) {
-                if (i == j) coefficients_matrix[i * width + j] = 2;
-                else coefficients_matrix[i * width + j] = 1;
+            for (int j = 0; j < n; j++) {
+                if (i == j)
+                    A[i * n + j] = 2;
+                else
+                    A[i * n + j] = 1;
             }
-            solutions_vector[i] = width + 1;
-            x[i] = solutions_vector[i] / coefficients_matrix[i * width + i];
-            sum_of_squared_residuals += solutions_vector[i] * solutions_vector[i];
+            b[i] = n + 1;
+            x[i] = b[i] / A[i * n + i];
+#pragma omp atomic
+            bhgv += b[i] * b[i];
         }
     }
 
-    if (use_second_parallel_method == 0) {
-        while (end_flag == 'f') {
-            x = matrix_vector_product_omp(x, numThreads, sum_of_squared_residuals);
+    if (parallel_loop == 0) {
+        while (end == 'f') {
+            x = matrix_vector_product_omp(x.get(), numThread, bhgv);
         }
     }
     else {
-        while (end_flag == 'f') {
-            x = matrix_vector_product_omp_second(x, numThreads, sum_of_squared_residuals);
+        while (end == 'f') {
+            x = matrix_vector_product_omp_second(x.get(), numThread, bhgv);
         }
     }
 
-    time = cpuSecond() - time; // время работы. начиная с инициализации
+    for (int i = 0; i < n; i++) {
+        printf("%f ", x[i]);  // выводится вектор ответов
+    }
 
-    std::cout << "Elapsed time (parallel): " << time << " sec." << std::endl;
+    time = cpuSecond() - time;  // время работы. начиная с инициализации
+
+    printf("Elapsed time (parallel): %.6f sec.\n", time);
 }
+int main(int argc, char** argv) {
 
-int main(int argc, char **argv)
-{
-    int numThreads = 2;
+    int numThread = 2;
     if (argc > 1)
-        numThreads = std::atoi(argv[1]);
+        numThread = atoi(argv[1]);
     if (argc > 2) {
-        height = std::atoi(argv[2]);
-        width = std::atoi(argv[2]);
+        m = atoi(argv[2]);
+        n = atoi(argv[2]);
     }
     if (argc > 3) {
-        use_second_parallel_method = std::atoi(argv[3]);
+        parallel_loop = atoi(argv[3]);
     }
-    run_parallel(numThreads);
-    return 0;
+    run_parallel(numThread);
 }
