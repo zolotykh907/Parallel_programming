@@ -6,14 +6,14 @@
 #include <cmath>
 #include <memory>
 
-double e = 0.00001;  // эпсила
+double e = 0.00001;
 
-std::unique_ptr<double[]> A;  // матрица коэффициентов
-std::unique_ptr<double[]> b;  // вектор ответов на уравнения
-int m = 4, n = 4;  // высота на ширину
+std::unique_ptr<double[]> A;
+std::unique_ptr<double[]> b;
+int m = 4, n = 4;
 
-char end = 'f';  // флаг, достигнута указанная точность
-double t = 0.1;  // коэффициент приближения
+char end = 'f';
+double t = 0.1;
 
 double loss = 0;
 int parallel_loop = 0;
@@ -52,7 +52,7 @@ std::unique_ptr<double[]> matrix_vector_product_omp(double* x, int numThread, do
     double bhg = 0;
 #pragma omp parallel num_threads(numThread)
     {
-        double aaaaaa = 0;
+        double pred_res = 0;
         int nthreads = omp_get_num_threads();
         int threadid = omp_get_thread_num();
         int items_per_thread = m / nthreads;
@@ -65,11 +65,11 @@ std::unique_ptr<double[]> matrix_vector_product_omp(double* x, int numThread, do
                 x_predict[i] = x_predict[i] + A[i * n + j] * x[j];
             }
             x_predict[i] = x_predict[i] - b[i];
-            aaaaaa += x_predict[i] * x_predict[i];
+            pred_res += x_predict[i] * x_predict[i];
             x_predict[i] = x[i] - t * x_predict[i];
         }
 #pragma omp atomic
-        bhg += aaaaaa;
+        bhg += pred_res;
     }
 
     proverka(x, x_predict.get(), numThread, bhg, bhgv);
@@ -110,7 +110,7 @@ void run_parallel(int numThread) {
     A = std::make_unique<double[]>(m * n);
     b = std::make_unique<double[]>(m);
     double bhgv = 0;
-    if (!A || !b || !x) 
+    if (!A || !b || !x)
     {
         printf("Error allocate memory!\n");
         exit(1);
@@ -150,10 +150,10 @@ void run_parallel(int numThread) {
     }
 
     for (int i = 0; i < n; i++) {
-        printf("%f ", x[i]);  // выводится вектор ответов
+        printf("%f ", x[i]);
     }
 
-    time = cpuSecond() - time;  // время работы. начиная с инициализации
+    time = cpuSecond() - time;
 
     printf("Elapsed time (parallel): %.6f sec.\n", time);
 }
