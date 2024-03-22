@@ -26,9 +26,9 @@ double cpuSecond() {
 
 int t_prov = 0;
 
-void proverka(double* x, double* x_predict, int numThread, double bhg, double bhgv) {
+void proverka(double* x, double* x_predict, int numThread, double sqe, double sqe_b) {
     int sm = 0;
-    double r = sqrt(bhg) / sqrt(bhgv);
+    double r = sqrt(sqe) / sqrt(sqe_b);
     if (loss < r && loss != 0 && loss > 0.999999999) {
         t = t / 10;
         t_prov = 1;
@@ -47,9 +47,9 @@ void proverka(double* x, double* x_predict, int numThread, double bhg, double bh
     }
 }
 
-std::unique_ptr<double[]> matrix_vector_product_omp(double* x, int numThread, double bhgv) {
+std::unique_ptr<double[]> matrix_vector_product_omp(double* x, int numThread, double sqe_b) {
     std::unique_ptr<double[]> x_predict(new double[n]);
-    double bhg = 0;
+    double sqe = 0;
 #pragma omp parallel num_threads(numThread)
     {
         double pred_res = 0;
@@ -69,10 +69,10 @@ std::unique_ptr<double[]> matrix_vector_product_omp(double* x, int numThread, do
             x_predict[i] = x[i] - t * x_predict[i];
         }
 #pragma omp atomic
-        bhg += pred_res;
+        sqe += pred_res;
     }
 
-    proverka(x, x_predict.get(), numThread, bhg, bhgv);
+    proverka(x, x_predict.get(), numThread, sqe, sqe_b);
     if (t_prov == 1) {
         x_predict.reset(x);
         t_prov = 0;
@@ -80,24 +80,24 @@ std::unique_ptr<double[]> matrix_vector_product_omp(double* x, int numThread, do
     return x_predict;
 }
 
-std::unique_ptr<double[]> matrix_vector_product_omp_second(double* x, int numThread, double bhgv) {
+std::unique_ptr<double[]> matrix_vector_product_omp_second(double* x, int numThread, double sqe_b) {
     std::unique_ptr<double[]> x_predict(new double[n]);
-    double bhg = 0;
+    double sqe = 0;
 #pragma omp parallel num_threads(numThread)
     {
-#pragma omp for schedule(dynamic, int(m / (numThread * 3))) nowait reduction(+:bhg)
+#pragma omp for schedule(dynamic, int(m / (numThread * 3))) nowait reduction(+:sqe)
         for (int i = 0; i < m; i++) {
             x_predict[i] = 0;
             for (int j = 0; j < n; j++) {
                 x_predict[i] = x_predict[i] + A[i * n + j] * x[j];
             }
             x_predict[i] = x_predict[i] - b[i];
-            bhg += x_predict[i] * x_predict[i];
+            sqe += x_predict[i] * x_predict[i];
             x_predict[i] = x[i] - t * x_predict[i];
         }
     }
 
-    proverka(x, x_predict.get(), numThread, bhg, bhgv);
+    proverka(x, x_predict.get(), numThread, sqe, sqe_b);
     if (t_prov == 1) {
         x_predict.reset(x);
         t_prov = 0;
@@ -109,7 +109,7 @@ void run_parallel(int numThread) {
     std::unique_ptr<double[]> x(new double[n]);
     A = std::make_unique<double[]>(m * n);
     b = std::make_unique<double[]>(m);
-    double bhgv = 0;
+    double sqe_b = 0;
     if (!A || !b || !x)
     {
         printf("Error allocate memory!\n");
@@ -134,18 +134,18 @@ void run_parallel(int numThread) {
             b[i] = n + 1;
             x[i] = b[i] / A[i * n + i];
 #pragma omp atomic
-            bhgv += b[i] * b[i];
+            sqe_b += b[i] * b[i];
         }
     }
 
     if (parallel_loop == 0) {
         while (end == 'f') {
-            x = matrix_vector_product_omp(x.get(), numThread, bhgv);
+            x = matrix_vector_product_omp(x.get(), numThread, sqe_b);
         }
     }
     else {
         while (end == 'f') {
-            x = matrix_vector_product_omp_second(x.get(), numThread, bhgv);
+            x = matrix_vector_product_omp_second(x.get(), numThread, sqe_b);
         }
     }
 
