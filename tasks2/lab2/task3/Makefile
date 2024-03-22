@@ -1,2 +1,2 @@
 main:
-	g++ -fopenmp -o a a.cpp
+	g++ -fopenmp -o task3 main.cpp
