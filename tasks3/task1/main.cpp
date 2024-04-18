@@ -1,63 +1,84 @@
 #include <iostream>
 #include <vector>
 #include <thread>
-#include <numeric>
-#include <memory>
 #include <chrono>
+#include <cstdlib>
 
+const int ROWS = 20000;
+const int COLS = 20000;
 
-const int MATRIX_SIZE = 20000;
-const int NUM_THREADS = 4;
-
-using MatrixPtr = std::shared_ptr<std::vector<std::vector<int>>>;
-using VectorPtr = std::shared_ptr<std::vector<int>>;
-MatrixPtr matrix;
-VectorPtr vector;
-std::vector<int> result(MATRIX_SIZE);
-
-void initialize() {
-    matrix = std::make_shared<std::vector<std::vector<int>>>(MATRIX_SIZE, std::vector<int>(MATRIX_SIZE));
-    vector = std::make_shared<std::vector<int>>(MATRIX_SIZE);
-
-    for (int i = 0; i < MATRIX_SIZE; ++i) {
-        for (int j = 0; j < MATRIX_SIZE; ++j) {
-            (*matrix)[i][j] = i + j;
+// Функция для заполнения матрицы случайными значениями в каждом потоке
+void fillMatrix(std::vector<std::vector<int>>& matrix, int startRow, int endRow) {
+    for (int i = startRow; i < endRow; ++i) {
+        for (int j = 0; j < COLS; ++j) {
+            matrix[i][j] = rand() % 10; // Заполнение случайным числом от 0 до 9
         }
     }
+}
 
-    for (int i = 0; i < MATRIX_SIZE; ++i) {
-        (*vector)[i] = i;
+// Функция для умножения матрицы на вектор в каждом потоке
+void matrixVectorMultiplication(std::vector<std::vector<int>>& matrix, std::vector<int>& vector,
+                                std::vector<int>& result, int startRow, int endRow) {
+    for (int i = startRow; i < endRow; ++i) {
+        int sum = 0;
+        for (int j = 0; j < COLS; ++j) {
+            sum += matrix[i][j] * vector[j];
+        }
+        result[i] = sum;
     }
 }
 
-void multiply(int start, int end) {
-    for (int i = start; i < end; ++i) {
-        result[i] = std::inner_product((*matrix)[i].begin(), (*matrix)[i].end(), (*vector).begin(), 0);
-    }
-}
-
-int main() {
-    initialize();
-
-    auto start_time = std::chrono::high_resolution_clock::now();
-
-    std::vector<std::thread> threads;
-    int chunk_size = MATRIX_SIZE / NUM_THREADS;
-    for (int i = 0; i < NUM_THREADS; ++i) {
-        int start = i * chunk_size;
-        int end = (i == NUM_THREADS - 1) ? MATRIX_SIZE : (i + 1) * chunk_size;
-        threads.emplace_back(multiply, start, end);
+int main(int argc, char *argv[]) {
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <num_threads>" << std::endl;
+        return 1;
     }
 
- 
-    for (auto& thread : threads) {
+    int numThreads = std::stoi(argv[1]);
+
+    std::vector<std::vector<int>> matrix(ROWS, std::vector<int>(COLS));
+    std::vector<int> vector(COLS);
+    std::vector<int> result(ROWS);
+
+    // Запоминаем время начала выполнения
+    auto start = std::chrono::steady_clock::now();
+
+    // Создание потоков для параллельного заполнения матрицы
+    std::vector<std::thread> fillThreads;
+    for (int i = 0; i < ROWS; ++i) {
+        fillThreads.emplace_back(fillMatrix, std::ref(matrix), i, i + 1);
+    }
+
+    // Ожидание завершения всех потоков заполнения матрицы
+    for (auto& thread : fillThreads) {
         thread.join();
     }
-    auto end_time = std::chrono::high_resolution_clock::now();
 
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    // Заполнение вектора случайными значениями
+    for (int i = 0; i < COLS; ++i) {
+        vector[i] = rand() % 10; // Заполнение случайным числом от 0 до 9
+    }
 
-    std::cout << "time: " << duration.count() << " ms." << std::endl;
+    // Создание потоков для параллельного умножения матрицы на вектор
+    std::vector<std::thread> multiplicationThreads;
+    int rowsPerThread = ROWS / numThreads;
+    for (int i = 0; i < numThreads; ++i) {
+        int startRow = i * rowsPerThread;
+        int endRow = (i == numThreads - 1) ? ROWS : (i + 1) * rowsPerThread;
+        multiplicationThreads.emplace_back(matrixVectorMultiplication, std::ref(matrix), std::ref(vector),
+                                            std::ref(result), startRow, endRow);
+    }
+
+    // Ожидание завершения всех потоков умножения матрицы на вектор
+    for (auto& thread : multiplicationThreads) {
+        thread.join();
+    }
+
+    // Запоминаем время окончания выполнения
+    auto end = std::chrono::steady_clock::now();
+
+    // Вывод времени выполнения
+    std::cout << "Time taken: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " milliseconds" << std::endl;
 
     return 0;
 }
