@@ -65,9 +65,7 @@ void run_parallel(size_t n, size_t m, double& t_parallel)
     std::unique_ptr<double[]> b(new double[n]);
     std::unique_ptr<double[]> c(new double[m]);
 
-    // Заполнение a и b данными
-
-    double t_start = cpuSecond(); // Замеряем время до запуска потоков
+    double t_start = cpuSecond();ков
 
     std::vector<std::thread> threads;
     int items_per_thread = m / count;
