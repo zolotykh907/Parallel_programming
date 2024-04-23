@@ -1,84 +1,110 @@
 #include <iostream>
-#include <vector>
 #include <thread>
+#include <vector>
 #include <chrono>
-#include <cstdlib>
+#include <memory>
 
-const int ROWS = 20000;
-const int COLS = 20000;
+int count = 40;
 
-// Функция для заполнения матрицы случайными значениями в каждом потоке
-void fillMatrix(std::vector<std::vector<int>>& matrix, int startRow, int endRow) {
-    for (int i = startRow; i < endRow; ++i) {
-        for (int j = 0; j < COLS; ++j) {
-            matrix[i][j] = rand() % 10; // Заполнение случайным числом от 0 до 9
-        }
+double cpuSecond()
+{
+    using namespace std::chrono;
+    system_clock::time_point now = system_clock::now();
+    system_clock::duration tp = now.time_since_epoch();
+    return duration_cast<duration<double>>(tp).count();
+}
+
+void matrix_vector_product(double* a, double* b, double* c, int m, int n)
+{
+    for (int i = 0; i < m; i++)
+    {
+        c[i] = 0.0;
+        for (int j = 0; j < n; j++)
+            c[i] += a[i * n + j] * b[j];
     }
 }
 
-// Функция для умножения матрицы на вектор в каждом потоке
-void matrixVectorMultiplication(std::vector<std::vector<int>>& matrix, std::vector<int>& vector,
-                                std::vector<int>& result, int startRow, int endRow) {
-    for (int i = startRow; i < endRow; ++i) {
-        int sum = 0;
-        for (int j = 0; j < COLS; ++j) {
-            sum += matrix[i][j] * vector[j];
-        }
-        result[i] = sum;
+void matrix_vector_product_thread(double* a, double* b, double* c, int m, int n, int threadid, int items_per_thread)
+{
+    int lb = threadid * items_per_thread;
+    int ub = (threadid == count - 1) ? (m - 1) : (lb + items_per_thread - 1);
+
+    for (int i = lb; i <= ub; i++)
+    {
+        c[i] = 0.0;
+        for (int j = 0; j < n; j++)
+            c[i] += a[i * n + j] * b[j];
     }
 }
 
-int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <num_threads>" << std::endl;
-        return 1;
+void run_serial(size_t n, size_t m, double& t_serial)
+{
+    std::unique_ptr<double[]> a(new double[m * n]);
+    std::unique_ptr<double[]> b(new double[n]);
+    std::unique_ptr<double[]> c(new double[m]);
+
+    for (int i = 0; i < m; i++)
+    {
+        for (int j = 0; j < n; j++)
+            a[i * n + j] = i + j;
     }
 
-    int numThreads = std::stoi(argv[1]);
+    for (int j = 0; j < n; j++)
+        b[j] = j;
 
-    std::vector<std::vector<int>> matrix(ROWS, std::vector<int>(COLS));
-    std::vector<int> vector(COLS);
-    std::vector<int> result(ROWS);
+    t_serial = cpuSecond();
+    matrix_vector_product(a.get(), b.get(), c.get(), m, n);
+    t_serial = cpuSecond() - t_serial;
 
-    // Запоминаем время начала выполнения
-    auto start = std::chrono::steady_clock::now();
+    std::cout << "Elapsed time (serial): " << t_serial << " sec." << std::endl;
+}
 
-    // Создание потоков для параллельного заполнения матрицы
-    std::vector<std::thread> fillThreads;
-    for (int i = 0; i < ROWS; ++i) {
-        fillThreads.emplace_back(fillMatrix, std::ref(matrix), i, i + 1);
+void run_parallel(size_t n, size_t m, double& t_parallel)
+{
+    std::unique_ptr<double[]> a(new double[m * n]);
+    std::unique_ptr<double[]> b(new double[n]);
+    std::unique_ptr<double[]> c(new double[m]);
+
+    // Заполнение a и b данными
+
+    double t_start = cpuSecond(); // Замеряем время до запуска потоков
+
+    std::vector<std::thread> threads;
+    int items_per_thread = m / count;
+
+    for (int i = 0; i < count; i++)
+    {
+        threads.push_back(std::thread(matrix_vector_product_thread, a.get(), b.get(), c.get(), m, n, i, items_per_thread));
     }
 
-    // Ожидание завершения всех потоков заполнения матрицы
-    for (auto& thread : fillThreads) {
+    for (auto& thread : threads)
+    {
         thread.join();
     }
 
-    // Заполнение вектора случайными значениями
-    for (int i = 0; i < COLS; ++i) {
-        vector[i] = rand() % 10; // Заполнение случайным числом от 0 до 9
-    }
+    double t_end = cpuSecond(); // Замеряем время после завершения всех потоков
 
-    // Создание потоков для параллельного умножения матрицы на вектор
-    std::vector<std::thread> multiplicationThreads;
-    int rowsPerThread = ROWS / numThreads;
-    for (int i = 0; i < numThreads; ++i) {
-        int startRow = i * rowsPerThread;
-        int endRow = (i == numThreads - 1) ? ROWS : (i + 1) * rowsPerThread;
-        multiplicationThreads.emplace_back(matrixVectorMultiplication, std::ref(matrix), std::ref(vector),
-                                            std::ref(result), startRow, endRow);
-    }
+    std::cout << "Elapsed time (parallel): " << t_end - t_start << " sec." << std::endl;
 
-    // Ожидание завершения всех потоков умножения матрицы на вектор
-    for (auto& thread : multiplicationThreads) {
-        thread.join();
-    }
+    t_parallel = t_end - t_start;
+}
 
-    // Запоминаем время окончания выполнения
-    auto end = std::chrono::steady_clock::now();
+int main(int argc, char* argv[])
+{
+    size_t M = 1000;
+    size_t N = 1000;
+    if (argc > 1)
+        M = atoi(argv[1]);
+        N = atoi(argv[1]);
+    if (argc > 2)
+        count = atoi(argv[2]);
 
-    // Вывод времени выполнения
-    std::cout << "Time taken: " << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << " milliseconds" << std::endl;
+    double t_serial, t_parallel;
+    run_serial(M, N, t_serial);
+    run_parallel(M, N, t_parallel);
+
+    double speedup = t_serial / t_parallel;
+    std::cout << "Speedup: " << speedup << "x" << std::endl;
 
     return 0;
 }
