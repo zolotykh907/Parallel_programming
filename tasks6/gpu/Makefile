@@ -5,7 +5,7 @@ CXX = pgc++
 
 all:gpu
 	
-gpu: main1.cpp
+gpu: main2.cpp
 	$(CXX) $(GPU) $(INFO) $(LIBS) -o $@ $<
 
 clean:all
