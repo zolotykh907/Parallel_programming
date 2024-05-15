@@ -7,11 +7,11 @@ CXX = pgc++
 all:serial multi
 	
 
-serial:
-	$(CXX) $(HOST) $(INFO) $(LIBS) -o $@ main.cpp
+serial: main.cpp
+	$(CXX) $(HOST) $(INFO) $(LIBS) -o $@ $<
 
-multi:
-	$(CXX) $(MULT) $(INFO) $(LIBS) -o $@ main.cpp
+multi: main.cpp
+	$(CXX) $(MULT) $(INFO) $(LIBS) -o $@ $<
 
 clean:all
 	rm serial multi

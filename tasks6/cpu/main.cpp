@@ -10,27 +10,21 @@
 
 namespace opt = boost::program_options;
 
-double linearInterpolation(double x, double x1, double y1, double x2, double y2) 
+double linear_interpolation(double x, double x1, double y1, double x2, double y2)
 {
     double res = y1 + ((x - x1) * (y2 - y1) / (x2 - x1));
     return res;
 }
 
-
-void saveMatrixToFile(const std::unique_ptr<double[]>& matrix, int N, const std::string& filename) 
+void write_matrix(const std::unique_ptr<double[]>& matrix, int N, const std::string& filename)
 {
     std::ofstream outputFile(filename);
-    if (!outputFile.is_open()) 
-    {
-        std::cerr << "The file " << filename << " could not be opened for writing." << std::endl;
-        return;
-    }
-
+    
     int fieldWidth = 10;
 
-    for (int i = 0; i < N; ++i) 
+    for (int i = 0; i < N; ++i)
     {
-        for (int j = 0; j < N; ++j) 
+        for (int j = 0; j < N; ++j)
         {
             outputFile << std::setw(fieldWidth) << std::fixed << std::setprecision(4) << matrix[i * N + j];
         }
@@ -40,8 +34,7 @@ void saveMatrixToFile(const std::unique_ptr<double[]>& matrix, int N, const std:
     outputFile.close();
 }
 
-
-void initMatrix(std::unique_ptr<double[]>& arr, int N) 
+void create_matrix(std::unique_ptr<double[]>& arr, int N)
 {
 
     arr[0] = 10.0;
@@ -51,10 +44,10 @@ void initMatrix(std::unique_ptr<double[]>& arr, int N)
 
     for (size_t i = 1; i < N - 1; i++)
     {
-        arr[0 * N + i] = linearInterpolation(i, 0.0, arr[0], N - 1, arr[N - 1]);
-        arr[i * N + 0] = linearInterpolation(i, 0.0, arr[0], N - 1, arr[(N - 1) * N]);
-        arr[i * N + (N - 1)] = linearInterpolation(i, 0.0, arr[N - 1], N - 1, arr[(N - 1) * N + (N - 1)]);
-        arr[(N - 1) * N + i] = linearInterpolation(i, 0.0, arr[(N - 1) * N], N - 1, arr[(N - 1) * N + (N - 1)]);
+        arr[0 * N + i] = linear_interpolation(i, 0.0, arr[0], N - 1, arr[N - 1]);
+        arr[i * N + 0] = linear_interpolation(i, 0.0, arr[0], N - 1, arr[(N - 1) * N]);
+        arr[i * N + (N - 1)] = linear_interpolation(i, 0.0, arr[N - 1], N - 1, arr[(N - 1) * N + (N - 1)]);
+        arr[(N - 1) * N + i] = linear_interpolation(i, 0.0, arr[(N - 1) * N], N - 1, arr[(N - 1) * N + (N - 1)]);
     }
 }
 
@@ -80,7 +73,7 @@ int main(int argc, char const* argv[])
 
     int N = vm["num_cells"].as<int>();
     double accuracy = vm["accuracy"].as<double>();
-    int countIter = vm["num_iter"].as<int>();
+    int iter_num = vm["num_iter"].as<int>();
 
     double error = 1.0;
     int iter = 0;
@@ -88,21 +81,21 @@ int main(int argc, char const* argv[])
     std::unique_ptr<double[]> A(new double[N * N]);
     std::unique_ptr<double[]> Anew(new double[N * N]);
 
-    initMatrix(A, N);
-    initMatrix(Anew, N);
+    create_matrix(A, N);
+    create_matrix(Anew, N);
 
     double* prevmatrix = Anew.get();
     double* curmatrix = A.get();
 
 
     auto start = std::chrono::high_resolution_clock::now();
-    while (iter < countIter && iter<10000000 && error > accuracy) {
+    while (iter < iter_num && iter<10000000 && error > accuracy) {
 #pragma acc parallel loop independent collapse(2) gang num_gangs(40)
         for (size_t i = 1; i < N - 1; i++)
         {
             for (size_t j = 1; j < N - 1; j++)
             {
-                curmatrix[i * N + j] = 0.25 * (prevmatrix[i * N + j + 1] + prevmatrix[i * N + j - 1] + prevmatrix[(i - 1) * N + j] + prevmatrix[(i + 1) * N + j]);
+                curmatrix[i * N + j] = ((prevmatrix[i * N + j + 1] + prevmatrix[i * N + j - 1] + prevmatrix[(i - 1) * N + j] + prevmatrix[(i + 1) * N + j]))/4;
             }
         }
 
@@ -142,7 +135,7 @@ int main(int argc, char const* argv[])
             std::cout << std::endl;
         }
     }
-    saveMatrixToFile(std::ref(A), N, "matrix.txt");
+    write_matrix(std::ref(A), N, "matrix.txt");
     A = nullptr;
     Anew = nullptr;
     return 0;
