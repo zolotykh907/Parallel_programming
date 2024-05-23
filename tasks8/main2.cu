@@ -87,10 +87,11 @@ __global__ void compute_error(double* curmatrix, double* prevmatrix, double* max
     }
 
     double block_max = cub::BlockReduce<double, blockSize>(temp_storage).Reduce(local_max, cub::Max());
+
     if (threadIdx.x == 0 && threadIdx.y == 0) {
-        atomicMax(max_error, block_max);
+        int block_index = blockIdx.y * gridDim.x + blockIdx.x;
+        max_error[block_index] = block_max;
     }
-    
 }
 
 int main(int argc, char const* argv[]) {
@@ -128,47 +129,58 @@ int main(int argc, char const* argv[]) {
     double* d_curmatrix;
     double* d_prevmatrix;
     double* d_max_error;
-    
+
+    dim3 blockDim(32, 32);
+    dim3 gridDim((N + blockDim.x - 1) / blockDim.x, (N + blockDim.y - 1) / blockDim.y);
+    unsigned int totalBlocks = gridDim.x * gridDim.y;
+
     cudaMalloc(&d_curmatrix, N * N * sizeof(double));
     cudaMalloc(&d_prevmatrix, N * N * sizeof(double));
-    cudaMalloc(&d_max_error, sizeof(double));
+    cudaMalloc(&d_max_error, totalBlocks * sizeof(double));
     cudaMemcpy(d_curmatrix, curmatrix, N * N * sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(d_prevmatrix, prevmatrix, N * N * sizeof(double), cudaMemcpyHostToDevice);
 
-    dim3 blockDim(32, 32);
-    dim3 gridDim((N + blockDim.x - 1) / blockDim.x, (N + blockDim.y - 1) / blockDim.y); //сколько блоков
-
     cudaGraph_t graph;
     cudaGraphExec_t graphExec;
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
+
     bool graphCreated = false;
 
     auto start = std::chrono::high_resolution_clock::now();
 
+    cudaMemset(d_max_error, 0, totalBlocks * sizeof(double));
+
+    double* h_max_error = new double[N * N];
+
     while (iter < countIter && error > accuracy) {
         if (!graphCreated) {
-            cudaStream_t stream;
-            cudaStreamCreate(&stream);
             cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
-
+            
+            for(int i =0; i<999; i++){
+                iterate<<<gridDim, blockDim, 0, stream>>>(d_curmatrix, d_prevmatrix, N);
+                std::swap(d_prevmatrix, d_curmatrix);
+            }
+            
             iterate<<<gridDim, blockDim, 0, stream>>>(d_curmatrix, d_prevmatrix, N);
-            cudaMemset(d_max_error, 0, sizeof(double));
             compute_error<32><<<gridDim, blockDim, 0, stream>>>(d_curmatrix, d_prevmatrix, d_max_error, N);
 
             cudaStreamEndCapture(stream, &graph);
             cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0);
-            cudaStreamDestroy(stream);
+            
             graphCreated = true;
         }
+        else{
+            cudaGraphLaunch(graphExec, stream);
+            cudaMemcpy(h_max_error, d_max_error,totalBlocks* sizeof(double), cudaMemcpyDeviceToHost);
+            double* maxElement = std::max_element(h_max_error, h_max_error + totalBlocks);
 
-        cudaGraphLaunch(graphExec, 0);
-        cudaMemcpy(&error, d_max_error, sizeof(double), cudaMemcpyDeviceToHost);
+            error = *maxElement;
 
-        if (iter % 1000 == 0) {
-            std::cout << "iteration: " << iter + 1 << " error: " << error << std::endl;
+            std::cout << "iteration: " << iter + 1000 << " error: " << error << std::endl;
+            
+            iter+=1000;
         }
-
-        std::swap(d_prevmatrix, d_curmatrix);
-        iter++;
     }
 
     cudaMemcpy(A.arr.data(), d_curmatrix, N * N * sizeof(double), cudaMemcpyDeviceToHost);
@@ -193,6 +205,7 @@ int main(int argc, char const* argv[]) {
     cudaFree(d_curmatrix);
     cudaFree(d_prevmatrix);
     cudaFree(d_max_error);
+    cudaStreamDestroy(stream);
     cudaGraphExecDestroy(graphExec);
     cudaGraphDestroy(graph);
 
