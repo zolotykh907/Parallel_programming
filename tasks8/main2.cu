@@ -15,36 +15,43 @@ template <class ctype>
 class Data {
 private:
     int len;
+    ctype* d_arr;
+
 public:
     std::vector<ctype> arr;
-    Data(int length) : len(length), arr(len) {
-#pragma acc enter data copyin(this)
-#pragma acc enter data create(arr[0:len])
+
+    Data(int length) : len(length), arr(len), d_arr(nullptr) {
+        cudaError_t err = cudaMalloc((void**)&d_arr, len * sizeof(ctype));
+        if (err != cudaSuccess) {
+            std::cerr << "CUDA memory allocation failed: " << cudaGetErrorString(err) << std::endl;
+            exit(EXIT_FAILURE);
+        }
     }
+
     ~Data() {
-#pragma acc exit data delete(arr)
-#pragma acc exit data delete(this)
+        if (d_arr) {
+            cudaFree(d_arr);
+        }
+    }
+    void copyToDevice() {
+        cudaError_t err = cudaMemcpy(d_arr, arr.data(), len * sizeof(ctype), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) {
+            std::cerr << "CUDA memory copy to device failed: " << cudaGetErrorString(err) << std::endl;
+            exit(EXIT_FAILURE);
+        }
+    }
+    void copyToHost() {
+        cudaError_t err = cudaMemcpy(arr.data(), d_arr, len * sizeof(ctype), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            std::cerr << "CUDA memory copy to host failed: " << cudaGetErrorString(err) << std::endl;
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    ctype* getDevicePointer() {
+        return d_arr;
     }
 };
-
-double linear_interpolation(double x, double x1, double y1, double x2, double y2) {
-    double res = y1 + ((x - x1) * (y2 - y1) / (x2 - x1));
-    return res;
-}
-
-void create_matrix(std::vector<double>& arr, int N) {
-    arr[0] = 10.0;
-    arr[N - 1] = 20.0;
-    arr[(N - 1) * N + (N - 1)] = 30.0;
-    arr[(N - 1) * N] = 20.0;
-
-    for (size_t i = 1; i < N - 1; i++) {
-        arr[0 * N + i] = linear_interpolation(i, 0.0, arr[0], N - 1, arr[N - 1]);
-        arr[i * N + 0] = linear_interpolation(i, 0.0, arr[0], N - 1, arr[(N - 1) * N]);
-        arr[i * N + (N - 1)] = linear_interpolation(i, 0.0, arr[N - 1], N - 1, arr[(N - 1) * N + (N - 1)]);
-        arr[(N - 1) * N + i] = linear_interpolation(i, 0.0, arr[(N - 1) * N], N - 1, arr[(N - 1) * N + (N - 1)]);
-    }
-}
 
 void write_matrix(const double* matrix, int N, const std::string& filename) {
     std::ofstream outputFile(filename);
@@ -60,48 +67,82 @@ void write_matrix(const double* matrix, int N, const std::string& filename) {
     outputFile.close();
 }
 
-__global__ void iterate(double* curmatrix, double* prevmatrix, int N) {
+double linearInterpolation(double x, double x1, double y1, double x2, double y2) {
+    return y1 + ((x - x1) * (y2 - y1) / (x2 - x1));
+}
+
+void init_error(Data<double>& matr, int size){
+    for (int i = 0; i < size*size; ++i){
+        matr.arr[i] = 0.0;
+    }
+}
+
+void init(Data<double>& matrix, int size) {
+    for (int i = 0; i < size; ++i) {
+        for (int j = 0; j < size; ++j) {
+            matrix.arr[i * size + j] = 0;
+        }
+    }
+    matrix.arr[0] = 10.0;
+    matrix.arr[size - 1] = 20.0;
+    matrix.arr[(size - 1) * size + (size - 1)] = 30.0;
+    matrix.arr[(size - 1) * size] = 20.0;
+    for (int i = 1; i < size - 1; ++i) {
+        matrix.arr[i * size + 0] = linearInterpolation(i, 0.0, matrix.arr[0], size - 1, matrix.arr[(size - 1) * size]);
+    }
+    for (int i = 1; i < size - 1; ++i) {
+        matrix.arr[0 * size + i] = linearInterpolation(i, 0.0, matrix.arr[0], size - 1, matrix.arr[size - 1]);
+    }
+    for (int i = 1; i < size - 1; ++i) {
+        matrix.arr[(size - 1) * size + i] = linearInterpolation(i, 0.0, matrix.arr[(size - 1) * size], size - 1, matrix.arr[(size - 1) * size + (size - 1)]);
+    }
+    for (int i = 1; i < size - 1; ++i) {
+        matrix.arr[i * size + (size - 1)] = linearInterpolation(i, 0.0, matrix.arr[size - 1], size - 1, matrix.arr[(size - 1) * size + (size - 1)]);
+    }
+}
+
+__global__ void iterate(double* matrix, double* lastMatrix, int size) {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     int i = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (j == 0 || i == 0 || i >= N - 1 || j >= N - 1) return;
+    if (j == 0 || i == 0 || i >= size - 1 || j >= size - 1) return;
 
-    curmatrix[i * N + j] = 0.25 * (prevmatrix[i * N + j + 1] + prevmatrix[i * N + j - 1] +
-                                   prevmatrix[(i - 1) * N + j] + prevmatrix[(i + 1) * N + j]);
+    matrix[i * size + j] = 0.25 * (lastMatrix[i * size + j + 1] + lastMatrix[i * size + j - 1] +
+                                   lastMatrix[(i - 1) * size + j] + lastMatrix[(i + 1) * size + j]);
 }
 
 template <unsigned int blockSize>
-__global__ void compute_error(double* curmatrix, double* prevmatrix, double* max_error, int N) {
+__global__ void compute_error(double* matrix, double* lastMatrix, double* max_error, int size) {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     int i = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (j >= N || i >= N) return;
+    if (j >= size || i >= size) return;
 
     __shared__ typename cub::BlockReduce<double, blockSize>::TempStorage temp_storage;
     double local_max = 0.0;
 
-    if (j > 0 && i > 0 && j < N - 1 && i < N - 1) {
-        int index = i * N + j;
-        double error = fabs(curmatrix[index] - prevmatrix[index]);
+    if (j > 0 && i > 0 && j < size - 1 && i < size - 1) {
+        int index = i * size + j;
+        double error = fabs(matrix[index] - lastMatrix[index]);
         local_max = error;
     }
 
     double block_max = cub::BlockReduce<double, blockSize>(temp_storage).Reduce(local_max, cub::Max());
 
     if (threadIdx.x == 0 && threadIdx.y == 0) {
-        int block_index = blockIdx.y * gridDim.x + blockIdx.x;
-        max_error[block_index] = block_max;
+        atomicMax(reinterpret_cast<unsigned long long*>(max_error), __double_as_longlong(block_max));
     }
 }
 
-int main(int argc, char const* argv[]) {
+
+
+int main(int argc, char const *argv[]) {
     opt::options_description desc("Arguments");
     desc.add_options()
-        ("accuracy", opt::value<double>()->default_value(1e-6), "accuracy")
-        ("matr_size", opt::value<int>()->default_value(256), "matrix_size")
-        ("num_iter", opt::value<int>()->default_value(1000000), "num_iterations")
-        ("help", "help");
-
+        ("accuracy", opt::value<double>(), "Accuracy")
+        ("matr_size", opt::value<int>(), "Size of matrix")
+        ("num_iter", opt::value<int>(), "Count of iterations")
+        ("help", "Help");
     opt::variables_map vm;
     opt::store(opt::parse_command_line(argc, argv, desc), vm);
     opt::notify(vm);
@@ -109,36 +150,37 @@ int main(int argc, char const* argv[]) {
         std::cout << desc << "\n";
         return 1;
     }
-
-    int N = vm["matr_size"].as<int>();
+    if (!vm.count("matr_size") || !vm.count("accuracy") || !vm.count("num_iter")) {
+        std::cerr << "Missing required arguments: matr_size, accuracy, or num_iter.\n";
+        return 1;
+    }
+    auto start = std::chrono::high_resolution_clock::now();
+    int size = vm["matr_size"].as<int>();
     double accuracy = vm["accuracy"].as<double>();
     int countIter = vm["num_iter"].as<int>();
 
-    double error = 1.0;
+    Data<double> matrix(size * size);
+    Data<double> lastMatrix(size * size);
+    
+    init(matrix, size);
+    init(lastMatrix, size);
+    double error;
+    error = accuracy + 1;
     int iter = 0;
-
-    Data<double> A(N * N);
-    Data<double> B(N * N);
-
-    create_matrix(A.arr, N);
-    create_matrix(B.arr, N);
-
-    double* curmatrix = A.arr.data();
-    double* prevmatrix = B.arr.data();
-
-    double* d_curmatrix;
-    double* d_prevmatrix;
-    double* d_max_error;
-
+   
     dim3 blockDim(32, 32);
-    dim3 gridDim((N + blockDim.x - 1) / blockDim.x, (N + blockDim.y - 1) / blockDim.y);
-    unsigned int totalBlocks = gridDim.x * gridDim.y;
+    dim3 gridDim((size + blockDim.x - 1) / blockDim.x, (size + blockDim.y - 1) / blockDim.y);
+    int totalBlocks = gridDim.x * gridDim.y;
 
-    cudaMalloc(&d_curmatrix, N * N * sizeof(double));
-    cudaMalloc(&d_prevmatrix, N * N * sizeof(double));
-    cudaMalloc(&d_max_error, totalBlocks * sizeof(double));
-    cudaMemcpy(d_curmatrix, curmatrix, N * N * sizeof(double), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_prevmatrix, prevmatrix, N * N * sizeof(double), cudaMemcpyHostToDevice);
+    Data<double> d_max_error(gridDim.x * gridDim.y);
+
+    d_max_error.copyToDevice();
+    matrix.copyToDevice();
+    lastMatrix.copyToDevice();
+
+    double* matrix_link = matrix.getDevicePointer();
+    double* lastMatrix_link = lastMatrix.getDevicePointer();
+    double* d_max_error_link = d_max_error.getDevicePointer();
 
     cudaGraph_t graph;
     cudaGraphExec_t graphExec;
@@ -147,64 +189,56 @@ int main(int argc, char const* argv[]) {
 
     bool graphCreated = false;
 
-    auto start = std::chrono::high_resolution_clock::now();
+cudaMemset(d_max_error_link, 0, sizeof(double));
 
-    cudaMemset(d_max_error, 0, totalBlocks * sizeof(double));
-
-    double* h_max_error = new double[N * N];
-
-    while (iter < countIter && error > accuracy) {
-        if (!graphCreated) {
-            cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
-            
-            for(int i =0; i<999; i++){
-                iterate<<<gridDim, blockDim, 0, stream>>>(d_curmatrix, d_prevmatrix, N);
-                std::swap(d_prevmatrix, d_curmatrix);
-            }
-            
-            iterate<<<gridDim, blockDim, 0, stream>>>(d_curmatrix, d_prevmatrix, N);
-            compute_error<32><<<gridDim, blockDim, 0, stream>>>(d_curmatrix, d_prevmatrix, d_max_error, N);
-
-            cudaStreamEndCapture(stream, &graph);
-            cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0);
-            
-            graphCreated = true;
+while (iter < countIter && error > accuracy) {
+    if (!graphCreated) {
+        cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+        
+        for(int i = 0; i < 999; i++){
+            iterate<<<gridDim, blockDim, 0, stream>>>(matrix_link, lastMatrix_link, size);
+            std::swap(lastMatrix_link, matrix_link);
         }
-        else{
-            cudaGraphLaunch(graphExec, stream);
-            cudaMemcpy(h_max_error, d_max_error,totalBlocks* sizeof(double), cudaMemcpyDeviceToHost);
-            double* maxElement = std::max_element(h_max_error, h_max_error + totalBlocks);
+        
+        iterate<<<gridDim, blockDim, 0, stream>>>(matrix_link, lastMatrix_link, size);
+        compute_error<32><<<gridDim, blockDim, 0, stream>>>(matrix_link, lastMatrix_link, d_max_error_link, size);
 
-            error = *maxElement;
+        cudaStreamEndCapture(stream, &graph);
+        cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0);
+        
+        graphCreated = true;
+    } else {
+        cudaGraphLaunch(graphExec, stream);
+        cudaStreamSynchronize(stream);
+        
+        double temp_error;
+        cudaMemcpy(&temp_error, d_max_error_link, sizeof(double), cudaMemcpyDeviceToHost);
+        error = temp_error;
 
-            std::cout << "iteration: " << iter + 1000 << " error: " << error << std::endl;
-            
-            iter+=1000;
-        }
+        std::cout << "Iteration: " << iter + 1000 << ", Error: " << error << std::endl;
+        
+        iter += 1000;
+        cudaMemset(d_max_error_link, 0, sizeof(double));
     }
+}
 
-    cudaMemcpy(A.arr.data(), d_curmatrix, N * N * sizeof(double), cudaMemcpyDeviceToHost);
-
+    matrix.copyToHost();
     auto end = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> duration = end - start;
     auto time_s = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
     std::cout << "time: " << time_s << " error: " << error << " iteration: " << iter << std::endl;
 
-    if (N <= 13) {
-        for (size_t i = 0; i < N; i++) {
-            for (size_t j = 0; j < N; j++) {
-                std::cout << A.arr[i * N + j] << ' ';
+    if (size <= 13) {
+        for (size_t i = 0; i < size; i++) {
+            for (size_t j = 0; j < size; j++) {
+                std::cout << matrix.arr[i * size + j] << ' ';
             }
             std::cout << std::endl;
         }
     }
 
-    write_matrix(A.arr.data(), N, "matrix2.txt");
+    write_matrix(matrix.arr.data(), size, "matrix2.txt");
 
-    cudaFree(d_curmatrix);
-    cudaFree(d_prevmatrix);
-    cudaFree(d_max_error);
     cudaStreamDestroy(stream);
     cudaGraphExecDestroy(graphExec);
     cudaGraphDestroy(graph);
