@@ -130,9 +130,16 @@ __global__ void compute_error(double* curmatrix, double* prevmatrix, double* max
     double block_max = cub::BlockReduce<double, blockSize>(temp_storage).Reduce(local_max, cub::Max());
 
     if (threadIdx.x == 0 && threadIdx.y == 0) {
-        atomicMax(reinterpret_cast<unsigned long long*>(max_error), __double_as_longlong(block_max));
+        int block_index = blockIdx.y * gridDim.x + blockIdx.x;
+        max_error[block_index] = block_max;
     }
 }
+
+struct CudaFreeDeleter {
+    void operator()(void* ptr) const {
+        cudaFree(ptr);
+    }
+};
 
 struct StreamDeleter {
     void operator()(cudaStream_t* stream) {
@@ -154,7 +161,6 @@ struct GraphExecDeleter {
         delete graphExec;
     }
 };
-
 
 int main(int argc, char const *argv[]) {
     opt::options_description desc("Arguments");
@@ -192,6 +198,18 @@ int main(int argc, char const *argv[]) {
     //int totalBlocks = gridDim.x * gridDim.y;
 
     Data<double> d_max_error(gridDim.x * gridDim.y);
+    Data<double> d_final_max_error(1);
+    void* d_temp_storage = nullptr;
+    size_t temp_storage_bytes = 0;
+
+    cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_max_error.getDevicePointer(), d_final_max_error.getDevicePointer(), gridDim.x * gridDim.y);
+    std::unique_ptr<void, CudaFreeDeleter> d_temp_storage_unique;
+    cudaError_t err = cudaMalloc(&d_temp_storage, temp_storage_bytes);
+    if (err != cudaSuccess) {
+        std::cerr << "CUDA memory allocation failed: " << cudaGetErrorString(err) << std::endl;
+        exit(EXIT_FAILURE);
+    }
+    d_temp_storage_unique.reset(d_temp_storage);
 
     d_max_error.copyToDevice();
     curmatrix.copyToDevice();
@@ -200,6 +218,7 @@ int main(int argc, char const *argv[]) {
     double* curmatrix_adr = curmatrix.getDevicePointer();
     double* prevmatrix_adr = prevmatrix.getDevicePointer();
     double* d_max_error_adr = d_max_error.getDevicePointer();
+    double* d_final_max_error_adr = d_final_max_error.getDevicePointer();
 
     std::unique_ptr<cudaStream_t, StreamDeleter> stream(new cudaStream_t);
     std::unique_ptr<cudaGraph_t, GraphDeleter> graph(new cudaGraph_t);
@@ -209,6 +228,8 @@ int main(int argc, char const *argv[]) {
     bool graphCreated = false;
 
     cudaMemset(d_max_error_adr, 0, sizeof(double));
+
+    double final_error;
 
     while (iter < countIter && error > accuracy) {
         if (!graphCreated) {
@@ -228,18 +249,16 @@ int main(int argc, char const *argv[]) {
             graphCreated = true;
         } else {
             cudaGraphLaunch(*graphExec, *stream);
-            cudaStreamSynchronize(*stream);
+            //cudaStreamSynchronize(*stream);
             
-            double temp_error;
-            cudaMemcpy(&temp_error, d_max_error_adr, sizeof(double), cudaMemcpyDeviceToHost);
-            error = temp_error;
-
-            
+            cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_max_error_adr, d_final_max_error_adr, gridDim.x * gridDim.y, *stream);
+            cudaMemcpy(&final_error, d_final_max_error_adr, sizeof(double), cudaMemcpyDeviceToHost);
+            error = final_error;
 
             std::cout << "Iteration: " << iter + 1000 << ", Error: " << error << std::endl;
             
             iter += 1000;
-            cudaMemset(d_max_error_adr, 0, sizeof(double));
+            //cudaMemset(d_max_error_adr, 0, sizeof(double));
         }
     }
 
