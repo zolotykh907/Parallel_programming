@@ -134,6 +134,28 @@ __global__ void compute_error(double* curmatrix, double* prevmatrix, double* max
     }
 }
 
+struct StreamDeleter {
+    void operator()(cudaStream_t* stream) {
+        cudaStreamDestroy(*stream);
+        delete stream;
+    }
+};
+
+struct GraphDeleter {
+    void operator()(cudaGraph_t* graph) {
+        cudaGraphDestroy(*graph);
+        delete graph;
+    }
+};
+
+struct GraphExecDeleter {
+    void operator()(cudaGraphExec_t* graphExec) {
+        cudaGraphExecDestroy(*graphExec);
+        delete graphExec;
+    }
+};
+
+
 int main(int argc, char const *argv[]) {
     opt::options_description desc("Arguments");
     desc.add_options()
@@ -179,34 +201,34 @@ int main(int argc, char const *argv[]) {
     double* prevmatrix_adr = prevmatrix.getDevicePointer();
     double* d_max_error_adr = d_max_error.getDevicePointer();
 
-    cudaGraph_t graph;
-    cudaGraphExec_t graphExec;
-    cudaStream_t stream;
-    cudaStreamCreate(&stream);
-
+    std::unique_ptr<cudaStream_t, StreamDeleter> stream(new cudaStream_t);
+    std::unique_ptr<cudaGraph_t, GraphDeleter> graph(new cudaGraph_t);
+    std::unique_ptr<cudaGraphExec_t, GraphExecDeleter> graphExec(new cudaGraphExec_t);
+    
+    cudaStreamCreate(stream.get());
     bool graphCreated = false;
 
     cudaMemset(d_max_error_adr, 0, sizeof(double));
 
     while (iter < countIter && error > accuracy) {
         if (!graphCreated) {
-            cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
+            cudaStreamBeginCapture(*stream, cudaStreamCaptureModeGlobal);
             
             for(int i = 0; i < 999; i++){
-                iterate<<<gridDim, blockDim, 0, stream>>>(curmatrix_adr, prevmatrix_adr, size);
+                iterate<<<gridDim, blockDim, 0, *stream>>>(curmatrix_adr, prevmatrix_adr, size);
                 std::swap(prevmatrix_adr, curmatrix_adr);
             }
             
-            iterate<<<gridDim, blockDim, 0, stream>>>(curmatrix_adr, prevmatrix_adr, size);
-            compute_error<32><<<gridDim, blockDim, 0, stream>>>(curmatrix_adr, prevmatrix_adr, d_max_error_adr, size);
+            iterate<<<gridDim, blockDim, 0, *stream>>>(curmatrix_adr, prevmatrix_adr, size);
+            compute_error<32><<<gridDim, blockDim, 0, *stream>>>(curmatrix_adr, prevmatrix_adr, d_max_error_adr, size);
 
-            cudaStreamEndCapture(stream, &graph);
-            cudaGraphInstantiate(&graphExec, graph, nullptr, nullptr, 0);
+            cudaStreamEndCapture(*stream, graph.get());
+            cudaGraphInstantiate(graphExec.get(), *graph, nullptr, nullptr, 0);
             
             graphCreated = true;
         } else {
-            cudaGraphLaunch(graphExec, stream);
-            cudaStreamSynchronize(stream);
+            cudaGraphLaunch(*graphExec, *stream);
+            cudaStreamSynchronize(*stream);
             
             double temp_error;
             cudaMemcpy(&temp_error, d_max_error_adr, sizeof(double), cudaMemcpyDeviceToHost);
@@ -237,10 +259,6 @@ int main(int argc, char const *argv[]) {
     }
 
     write_matrix(curmatrix.arr.data(), size, "matrix2.txt");
-
-    cudaStreamDestroy(stream);
-    cudaGraphExecDestroy(graphExec);
-    cudaGraphDestroy(graph);
 
     return 0;
 }
